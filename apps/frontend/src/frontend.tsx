@@ -4,17 +4,22 @@
  *
  * It is included in `src/index.html`.
  */
-
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
-
+const queryclient = new QueryClient();
 const elem = document.getElementById("root")!;
 const app = (
-  <StrictMode>
-    <App />
-  </StrictMode>
+
+    <QueryClientProvider client={queryclient}>
+      <App />
+    </QueryClientProvider>
+    
+
 );
 
 // https://bun.com/docs/bundler/hot-reloading#import-meta-hot-data
 (import.meta.hot.data.root ??= createRoot(elem)).render(app);
+
+

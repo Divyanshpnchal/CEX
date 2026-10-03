@@ -12,10 +12,10 @@ export function Signin() {
     const [usermail , setUsermail] =  useState<null | string>(null);
     const [password , setPassword] =  useState<null | string>(null);
   
-    async function signin(username:string , password:string){
+    async function signin(usermail:string , password:string){
         try{
             const response = await axios.post(`${BACKEND_URL}/signin` , {
-                usermail : username ,
+                usermail : usermail ,
                 password : password
             })
 
