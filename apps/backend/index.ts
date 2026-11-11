@@ -211,6 +211,21 @@ app.post("/withdraw" , authmiddleware ,async (req , res)=>{
 })
 
 
+app.get("/stock" , authmiddleware , async (req ,res)=>{
+    try{
+        console.log("reached at stock ")
+        const data = await prisma.stock.findMany();
+        res.json(data)
+    }
+    catch(err){
+        console.error(err)
+        res.status(401).json({message : "Something went wrong "})
+    }
+
+
+})
+
+
 
 
 app.listen(3002, () => { console.log("the backend sever has started at port 3002") });

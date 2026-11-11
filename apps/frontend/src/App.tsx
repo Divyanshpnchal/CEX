@@ -6,6 +6,7 @@ import { Signin } from './pages/signin';
 import { Home } from './pages/Home';
 import { Wallet } from './pages/wallet';
 import { Toaster } from "@/components/ui/sonner"
+import { Stock } from './pages/stock';
 export function App() {
   return (
     <BrowserRouter>
@@ -14,6 +15,7 @@ export function App() {
         <Route path="signin" element={<Signin></Signin>} ></Route>;
         <Route path="home" element={<Home></Home>} ></Route>
         <Route path="wallet" element={<Wallet></Wallet>} ></Route>
+        <Route path="stock" element={<Stock/>} ></Route>
         
       </Routes>
       <Toaster />

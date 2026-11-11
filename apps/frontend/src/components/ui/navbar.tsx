@@ -7,7 +7,7 @@ export function Navbar() {
   
   
     return (
-    <nav className="bg-neutral-primary fixed w-full z-20 top-0 start-0 border-b border-default">
+    <nav className="bg-neutral-primary fixed w-full z-20 top-0 start-0 border-b border-default sticky top-0">
       <div className="max-w-screen-xl flex flex-wrap items-center justify-between mx-auto p-4">
         <div className="font-bold">
             CEX
