@@ -1,4 +1,4 @@
-import {z}from "zod";
+import {boolean, string, z}from "zod";
 //symbol:string , userId:number , quantity:number , price:number , side:"asks"|"bids"
 const inputSchema = z.object({
     symbol :  z.enum(["AXIS" , "TATA"  ]),
@@ -6,6 +6,12 @@ const inputSchema = z.object({
     quantity : z.number().int().positive().max(100000),
     price : z.number().int().positive().max(1000000),
     side : z.enum(["asks" , "bids"])
+})
+
+const cancelinputSchema = z.object({
+    symbol :  z.enum(["AXIS" , "TATA"  ]),
+    userId : z.number().int().positive(),
+    orderId : z.number().int().positive()
 })
 
 type balanceobject = Record< number ,{totalBalance : number , lockedBalance : number , stocks : Record<string , {total : number , locked : number}> }>
@@ -683,3 +689,149 @@ balance[2].totalBalance = 5000;
 placeOrder("AXIS", 2, 5, 300, "asks");
 r = R(placeOrder("AXIS", 2, 5, 300, "bids"));
 check("P9 cancelled",     [r.ok, r.status, r.filled], [true, "cancelled", 0]);
+
+
+
+type CancelResult =
+    | { ok: true; orderId: number; cancelledQty: number }
+    | { ok: false; reason: string };
+
+type FoundOrder = {
+    side: "asks" | "bids";
+    price: number;
+    level: PriceLevel;
+    index: number;
+    order: Orders;
+};
+
+// only searches, does not care who owns the order
+function findOrder(symbol: string, orderId: number): FoundOrder | null {
+    const book = orderbook[symbol];
+    if (!book) return null;                       // symbol with no book: no crash
+
+    for (const side of ["asks", "bids"] as const) {
+        for (const [price, level] of Object.entries(book[side])) {
+            const index = level.Orders.findIndex(o => o.orderId === orderId);
+            if (index !== -1) {
+                return { side, price: Number(price), level, index, order: level.Orders[index] };
+            }
+        }
+    }
+    return null;
+}
+
+function cancelOrder(symbol: string, userId: number, orderId: number): CancelResult {
+    if (!cancelinputSchema.safeParse({ symbol, userId, orderId }).success) {
+        return { ok: false, reason: "invalid input" };
+    }
+
+    const found = findOrder(symbol, orderId);
+
+    // same message for "does not exist" and "not yours", so nothing leaks
+    if (!found || found.order.userId !== userId) {
+        return { ok: false, reason: "order not found" };
+    }
+
+    const { side, price, level, index, order } = found;
+    const remaining = order.quantity - order.filledQty;
+
+    // unlock what was reserved
+    if (side === "asks") {
+        balance[userId].stocks[symbol].locked -= remaining;
+    } else {
+        balance[userId].lockedBalance -= remaining * price;
+    }
+
+    // remove from the book and fix the level
+    level.Orders.splice(index, 1);
+    level.totalQty -= remaining;
+    if (level.Orders.length === 0) {
+        delete orderbook[symbol][side][price];
+    }
+
+    return { ok: true, orderId, cancelledQty: remaining };
+}
+
+
+
+// ---------- cancelOrder tests ----------
+let c: any;
+let cr: any;
+
+// C1: cancel an open bid
+resetState();
+c = R(placeOrder("AXIS", 1, 5, 290, "bids"));              // locks 1450
+cr = R(cancelOrder("AXIS", 1, c.orderId));
+check("C1 result",        [cr.ok, cr.cancelledQty], [true, 5]);
+check("C1 level gone",    Object.keys(A().bids), []);
+check("C1 money",         [balance[1].totalBalance, balance[1].lockedBalance], [30000, 0]);
+
+// C2: cancel an open ask
+resetSellState();
+c = R(placeOrder("AXIS", 2, 5, 300, "asks"));
+check("C2 locked before", balance[2].stocks["AXIS"], { total: 10, locked: 5 });
+cr = R(cancelOrder("AXIS", 2, c.orderId));
+check("C2 result",        [cr.ok, cr.cancelledQty], [true, 5]);
+check("C2 level gone",    Object.keys(A().asks), []);
+check("C2 stock",         balance[2].stocks["AXIS"], { total: 10, locked: 0 });
+
+// C3: partly filled bid, only the remaining part is cancelled
+resetSellState();
+c = R(placeOrder("AXIS", 1, 5, 300, "bids"));               // locks 1500
+placeOrder("AXIS", 2, 2, 300, "asks");                      // 2 shares trade at 300
+cr = R(cancelOrder("AXIS", 1, c.orderId));
+check("C3 cancelledQty",  cr.cancelledQty, 3);
+check("C3 level gone",    Object.keys(A().bids), []);
+check("C3 buyer",         [balance[1].totalBalance, balance[1].lockedBalance, balance[1].stocks["AXIS"].total], [29400, 0, 2]);
+
+// C4: cancel someone else's order
+resetSellState();
+c = R(placeOrder("AXIS", 1, 5, 290, "bids"));
+before = snap();
+cr = R(cancelOrder("AXIS", 2, c.orderId));
+check("C4 rejected",      cr.ok, false);
+check("C4 same reason as unknown", cr.reason, "order not found");
+check("C4 nothing changed", snap(), before);
+
+// C5: unknown order id
+resetState();
+before = snap();
+cr = R(cancelOrder("AXIS", 1, 999999));
+check("C5 rejected",      [cr.ok, cr.reason], [false, "order not found"]);
+check("C5 nothing changed", snap(), before);
+
+// C6: cancel the same order twice
+resetState();
+c = R(placeOrder("AXIS", 1, 5, 290, "bids"));
+cancelOrder("AXIS", 1, c.orderId);
+before = snap();
+cr = R(cancelOrder("AXIS", 1, c.orderId));
+check("C6 second cancel fails", cr.ok, false);
+check("C6 nothing changed", snap(), before);
+
+// C7: cancel an order from the middle of a queue
+resetState();
+balance[2].totalBalance = 30000;
+const qa = R(placeOrder("AXIS", 1, 2, 300, "bids"));
+const qb = R(placeOrder("AXIS", 2, 3, 300, "bids"));
+const qc = R(placeOrder("AXIS", 1, 4, 300, "bids"));
+cancelOrder("AXIS", 2, qb.orderId);
+check("C7 level qty",     A().bids[300]?.totalQty, 6);
+check("C7 queue order",   A().bids[300]?.Orders.map(o => o.orderId), [qa.orderId, qc.orderId]);
+check("C7 user2 unlocked", balance[2].lockedBalance, 0);
+check("C7 user1 still locked", balance[1].lockedBalance, 1800);
+
+// C8: cancelling the only order at a level moves the best price
+resetSellState();
+const a1 = R(placeOrder("AXIS", 2, 5, 299, "asks"));
+placeOrder("AXIS", 2, 5, 300, "asks");
+cancelOrder("AXIS", 2, a1.orderId);
+check("C8 best ask moved", getBestPrice("AXIS")?.bestAsks, 300);
+check("C8 stock",         balance[2].stocks["AXIS"], { total: 10, locked: 5 });
+
+// C9: a symbol with no book must not crash
+resetState();
+before = snap();
+cr = R(cancelOrder("TATA", 1, 1));
+check("C9 no crash, rejected", cr.ok, false);
+check("C9 nothing changed", snap(), before);
