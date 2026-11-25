@@ -6,6 +6,37 @@ import { hashSync, compareSync } from "bcrypt";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import { authmiddleware } from "./Middleware"
+import redis from "./src/redis";
+
+
+
+
+//subscriber
+const RESULT_CHANNEL = "result";
+const subscriber = redis.duplicate();
+const pending = new Map<string , (result : unknown) => void>();
+subscriber.subscribe(RESULT_CHANNEL ,(err)=>{
+    if(err){
+        console.error("failed to subscribe" , err);
+    }
+    console.log("subscribe successfully");
+})
+
+subscriber.on("message" , (channel , message)=>{
+    const reply = JSON.parse(message);
+    const resolve = pending.get(reply.requestId);
+    if(!resolve)return ;
+    pending.delete(reply.requestId);
+    resolve(reply.result); 
+})
+
+function sendOrder(order : object){
+    const requestId = crypto.randomUUID();
+    return new Promise((resolve)=>{
+        pending.set(requestId , resolve);
+        redis.lpush(QUEUE_KEY , JSON.stringify({requestId , ...order}));
+    });
+}
 
 
 
@@ -18,7 +49,7 @@ const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
 
 const Secret_key: string = process.env.JWT_KEY || "defaultkey";
-
+const QUEUE_KEY = "queue:orders";
 
 app.post("/signup", async (req, res) => {
     const usermail = req.body.usermail;
@@ -221,6 +252,34 @@ app.get("/stock" , authmiddleware , async (req ,res)=>{
         console.error(err)
         res.status(401).json({message : "Something went wrong "})
     }
+
+
+})
+
+
+
+app.post("/placeorder" , async (req , res)=>{
+    try{
+        const order = {
+            ordertype : req.body.ordertype,
+            symbol : req.body.symbol,
+            userId : req.body.userId,
+            quantity : req.body.quantity ?? null,
+            price : req.body.price ?? null,
+            side : req.body.side ?? null ,
+            orderId : req.body.orderId ?? null
+        }
+
+        const result = await sendOrder(order);
+        res.json(result);
+        
+        
+    }
+    catch(err){
+        console.error(err);
+        res.status(500).json({message : "failed to place order"});
+    }    
+
 
 
 })
